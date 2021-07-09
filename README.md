@@ -235,6 +235,18 @@ const vcard = 'BEGIN:VCARD\n' // metadata of the contact card
             + 'TEL;type=CELL;type=VOICE;waid=911234567890:+91 12345 67890\n' // WhatsApp ID + phone number
             + 'END:VCARD'
 const sentMsg  = await conn.sendMessage(id, {displayname: "Jeff", vcard: vcard}, MessageType.contact)
+// send a list message!
+const rows = [
+ {title: 'Row 1', description: "Hello it's description 1", rowId="rowid1"},
+ {title: 'Row 2', description: "Hello it's description 2", rowId="rowid2"}
+]
+const sections = [{title: "Section 1", rows: rows}]
+const button = {
+ buttonText: 'Click Me!',
+ description: "Hello it's list message",
+ sections: sections
+}
+const sendMsg = await conn.sendMessage(id, button, MessageType.listMessage)
 ```
 
 ### Media Messages
