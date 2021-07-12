@@ -8,10 +8,13 @@ import {
     MediaPathMap,
     WALocationMessage,
     WAContactMessage,
+    WAContactsArrayMessage,
+    WAGroupInviteMessage,
+    WAListMessage,
     WATextMessage,
     WAMessageContent, WAMetric, WAFlag, WAMessage, BaileysError, WA_MESSAGE_STATUS_TYPE, WAMessageProto, MediaConnInfo, MessageTypeProto, URL_REGEX, WAUrlInfo, WA_DEFAULT_EPHEMERAL, WAMediaUpload
 } from './Constants'
-import { generateMessageID, extensionForMediaMessage, whatsappID, unixTimestampSeconds, getAudioDuration, newMessagesDB, encryptedStream, decryptMediaMessageBuffer, generateThumbnail  } from './Utils'
+import { isGroupID, generateMessageID, extensionForMediaMessage, whatsappID, unixTimestampSeconds, getAudioDuration, newMessagesDB, encryptedStream, decryptMediaMessageBuffer, generateThumbnail  } from './Utils'
 import { Mutex } from './Mutex'
 import { Readable } from 'stream'
 
@@ -25,7 +28,7 @@ export class WAConnection extends Base {
      */
     async sendMessage(
         id: string,
-        message: string | WATextMessage | WALocationMessage | WAContactMessage | WAMediaUpload,
+        message: string | WATextMessage | WALocationMessage | WAContactMessage | WAContactsArrayMessage | WAGroupInviteMessage | WAMediaUpload | WAListMessage,
         type: MessageType,
         options: MessageOptions = {},
     ) {
@@ -33,10 +36,38 @@ export class WAConnection extends Base {
         await this.relayWAMessage (waMessage, { waitForAck: options.waitForAck !== false })
         return waMessage
     }
+    /**
+     * Send a list message
+     * @param id the id to send to
+     * @param button the optional button text, title and description button
+     * @param rows the rows of sections list message
+     */
+    async sendListMessage(
+        id: string,
+        button: { buttonText?: string; description?: string; title?: string },
+        rows: any = [],
+    ) {
+        let messageList = WAMessageProto.Message.fromObject({
+            listMessage: WAMessageProto.ListMessage.fromObject({
+                buttonText: button.buttonText,
+                description: button.description,
+                listType: 1,
+                sections: [
+                    {
+                        title: button.title,
+                        rows: [ ...rows ]
+                    }
+                ]
+            })
+        })
+        let waMessageList = await this.prepareMessageFromContent(id, messageList, {})
+        await this.relayWAMessage (waMessageList, { waitForAck: true })
+        return waMessageList
+    }
     /** Prepares a message for sending via sendWAMessage () */
     async prepareMessage(
         id: string,
-        message: string | WATextMessage | WALocationMessage | WAContactMessage | WAMediaUpload,
+        message: string | WATextMessage | WALocationMessage | WAContactMessage | WAContactsArrayMessage | WAGroupInviteMessage | WAMediaUpload | WAListMessage,
         type: MessageType,
         options: MessageOptions = {},
     ) {
@@ -56,16 +87,26 @@ export class WAConnection extends Base {
      * For the default see WA_DEFAULT_EPHEMERAL
      */
     async toggleDisappearingMessages(jid: string, ephemeralExpiration?: number, opts: { waitForAck: boolean } = { waitForAck: true }) {
-        const message = this.prepareMessageFromContent(
-            jid,
-            this.prepareDisappearingMessageSettingContent(ephemeralExpiration),
-            {}
-        )
-        await this.relayWAMessage(message, opts)
-        return message
+        if(isGroupID(jid)) {
+            const tag = this.generateMessageTag(true)
+            await this.setQuery([
+                [
+                    'group', 
+                    { id: tag, jid, type: 'prop', author: this.user.jid }, 
+                    [ [ 'ephemeral', { value: ephemeralExpiration.toString() }, null ] ] 
+                ]
+            ], [WAMetric.group, WAFlag.other], tag)
+        } else {
+            const message = this.prepareMessageFromContent(
+                jid,
+                this.prepareDisappearingMessageSettingContent(ephemeralExpiration),
+                {}
+            )
+            await this.relayWAMessage(message, opts)
+        }
     }
     /** Prepares the message content */
-    async prepareMessageContent (message: string | WATextMessage | WALocationMessage | WAContactMessage | WAMediaUpload, type: MessageType, options: MessageOptions) {
+    async prepareMessageContent (message: string | WATextMessage | WALocationMessage | WAContactMessage | WAContactsArrayMessage | WAGroupInviteMessage | WAMediaUpload | WAListMessage, type: MessageType, options: MessageOptions) {
         let m: WAMessageContent = {}
         switch (type) {
             case MessageType.text:
@@ -91,6 +132,15 @@ export class WAConnection extends Base {
                 break
             case MessageType.contact:
                 m.contactMessage = WAMessageProto.ContactMessage.fromObject(message as any)
+                break
+            case MessageType.contactsArray:
+                m.contactsArrayMessage = WAMessageProto.ContactsArrayMessage.fromObject(message as any)
+                break
+            case MessageType.groupInviteMessage:
+                m.groupInviteMessage = WAMessageProto.GroupInviteMessage.fromObject(message as any)
+                break
+            case MessageType.listMessage:
+                m.listMessage = WAMessageProto.ListMessage.fromObject(message as any)
                 break
             case MessageType.image:
             case MessageType.sticker:
@@ -141,7 +191,8 @@ export class WAConnection extends Base {
             bodyPath,
             fileEncSha256,
             fileSha256,
-            fileLength
+            fileLength,
+            didSaveToTmpPath
         } = await encryptedStream(media, mediaType, requiresOriginalForSomeProcessing)
          // url safe Base64 encode the SHA256 hash of the body
         const fileEncSha256B64 = encodeURIComponent( 
@@ -190,6 +241,14 @@ export class WAConnection extends Base {
             }
         }
         if (!mediaUrl) throw new Error('Media upload failed on all hosts')
+        // remove tmp files
+        await Promise.all(
+            [
+                fs.unlink(encBodyPath),
+                didSaveToTmpPath && bodyPath && fs.unlink(bodyPath)
+            ]
+            .filter(Boolean)
+        )
 
         const message = {
             [mediaType]: MessageTypeProto[mediaType].fromObject(

@@ -16,6 +16,9 @@ export type WANode = WA.Node
 export type WAMessage = proto.WebMessageInfo
 export type WAMessageContent = proto.IMessage
 export type WAContactMessage = proto.ContactMessage
+export type WAContactsArrayMessage = proto.ContactsArrayMessage
+export type WAGroupInviteMessage = proto.GroupInviteMessage
+export type WAListMessage = proto.ListMessage
 export type WAMessageKey = proto.IMessageKey
 export type WATextMessage = proto.ExtendedTextMessage
 export type WAContextInfo = proto.IContextInfo
@@ -27,6 +30,33 @@ export type WAInitResponse = {
     ref: string
     ttl: number
     status: 200
+}
+
+export interface WABusinessProfile {
+    description: string
+    email: string
+    business_hours: WABusinessHours
+    website: string[]
+    categories: WABusinessCategories[]
+    wid?: string
+}
+
+export type WABusinessCategories = {
+    id: string
+    localized_display_name:  string
+}
+
+export type WABusinessHours = {
+    timezone: string
+    config?:  WABusinessHoursConfig[]
+    business_config?: WABusinessHoursConfig[]
+}
+
+export type WABusinessHoursConfig = {
+    day_of_week: string
+    mode: string
+    open_time?: number
+    close_time?: number
 }
 
 export interface WALocationMessage {
@@ -105,6 +135,10 @@ export type WAConnectOptions = {
      * this keeps pinging the phone to send the chats over
      * */
     queryChatsTillReceived?: boolean
+    /** max time for the phone to respond to a query */
+    maxQueryResponseTime?: number
+	/** Log QR to terminal or not */
+    logQR?: boolean
 }
 /** from: https://stackoverflow.com/questions/3809401/what-is-a-good-regular-expression-to-match-a-url */
 export const URL_REGEX = /[-a-zA-Z0-9@:%._+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_+.~#?&//=]*)?/gi
@@ -221,8 +255,8 @@ export interface WAChat {
     read_only?: 'true' | 'false'
     mute?: string
     pin?: string
-    spam: 'false' | 'true'
-    modify_tag: string
+    spam?: 'false' | 'true'
+    modify_tag?: string
     name?: string
     /** when ephemeral messages were toggled on */
     eph_setting_ts?: string
@@ -272,6 +306,7 @@ export const STORIES_JID = 'status@broadcast'
 
 export enum WAFlag {
     available = 160,
+    other = 136, // don't know this one
     ignore = 1 << 7,
     acknowledge = 1 << 6,
     unavailable = 1 << 4,
@@ -295,6 +330,9 @@ export enum MessageType {
     text = 'conversation',
     extendedText = 'extendedTextMessage',
     contact = 'contactMessage',
+    contactsArray = 'contactsArrayMessage',
+    groupInviteMessage = 'groupInviteMessage',
+    listMessage = 'listMessage',
     location = 'locationMessage',
     liveLocation = 'liveLocationMessage',
 

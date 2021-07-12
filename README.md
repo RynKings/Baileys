@@ -6,7 +6,7 @@
 
  Baileys is type-safe, extensible and simple to use. If you require more functionality than provided, it'll super easy for you to write an extension. More on this [here](#WritingCustomFunctionality).
  
- If you're interested in building a WhatsApp bot, you may wanna check out [WhatsAppInfoBot](https://github.com/adiwajshing/WhatsappInfoBot) and an actual bot built with it, [Messcat](https://github.com/adiwajshing/Messcat).
+ If you're interested in building a WhatsApp bot, you may wanna check out [WhatsAppInfoBot](https://github.com/adiwajshing/WhatsappInfoBot) and an actual bot built with it, [Messcat](https://github.com/ashokatechmin/Messcat).
  
  **Read the docs [here](https://adiwajshing.github.io/Baileys)**
  **Join the Discord [here](https://discord.gg/7FYURJyqng)**
@@ -97,19 +97,21 @@ The entire `WAConnectOptions` struct is mentioned here with default values:
 ``` ts
 conn.connectOptions = {
     /** fails the connection if no data is received for X seconds */
-    maxIdleTimeMs?: 15_000,
+    maxIdleTimeMs?: 60_000,
     /** maximum attempts to connect */
-    maxRetries?: 5,
+    maxRetries?: 10,
     /** max time for the phone to respond to a connectivity test */
-    phoneResponseTime?: 10_000,
+    phoneResponseTime?: 15_000,
     /** minimum time between new connections */
-    connectCooldownMs?: 3000,
+    connectCooldownMs?: 4000,
     /** agent used for WS connections (could be a proxy agent) */
     agent?: Agent = undefined,
     /** agent used for fetch requests -- uploading/downloading media */
     fetchAgent?: Agent = undefined,
     /** always uses takeover for connecting */
     alwaysUseTakeover: true
+	/** log QR to terminal */
+    logQR: true
 } as WAConnectOptions
 ```
 
@@ -123,7 +125,7 @@ import * as fs from 'fs'
 
 const conn = new WAConnection() 
 // this will be called as soon as the credentials are updated
-conn.on ('credentials-updated', () => {
+conn.on ('open', () => {
     // save credentials whenever updated
     console.log (`credentials updated!`)
     const authInfo = conn.base64EncodedAuthInfo() // get all the auth info we need to restore this session
@@ -151,7 +153,7 @@ await conn.connect() // works the same
 ```
 See the browser credentials type in the docs.
 
-**Note**: Upon every successive connection, WA can update part of the stored credentials. Whenever that happens, the `credentials-updated` event is triggered, and you should probably update your saved credentials upon receiving that event. Not doing so *may* lead WA to log you out after a few weeks with a 419 error code.
+**Note**: Upon every successive connection, WA can update part of the stored credentials. Whenever that happens, the credentials are uploaded, and you should probably update your saved credentials upon receiving the `open` event. Not doing so *may* lead WA to log you out after a few weeks with a 419 error code.
 
 ## QR Callback
 
@@ -161,12 +163,6 @@ conn.on('qr', qr => {
     // Now, use the 'qr' string to display in QR UI or send somewhere
 }
 await conn.connect ()
-```
-
-The QR will auto-regenerate and will fire a new `qr` event after 30 seconds, if you don't want to regenerate or want to change the re-gen interval:
-``` ts
-conn.regenerateQRIntervalMs = null // no QR regen
-conn.regenerateQRIntervalMs = 20000 // QR regen every 20 seconds
 ```
 
 ## Handling Events
@@ -447,7 +443,7 @@ await conn.toggleDisappearingMessages(jid, 0)
     You can also load the entire conversation history if you want
     ``` ts
     await conn.loadAllMessages ("xyz@c.us", message => console.log("Loaded message with ID: " + message.key.id))
-    console.log("queried all messages") // promise resolves once all messages are retreived
+    console.log("queried all messages") // promise resolves once all messages are retrieved
     ```
 - To get the status of some person
     ``` ts
@@ -468,7 +464,7 @@ await conn.toggleDisappearingMessages(jid, 0)
 - To get someone's presence (if they're typing, online)
     ``` ts
     // the presence update is fetched and called here
-    conn.on ('user-presence-update', json => console.log(json.id + " presence is " + json.type))
+    conn.on ('CB:Presence', json => console.log(json.id + " presence is " + json.type))
     await conn.requestPresenceUpdate ("xyz@c.us") // request the update
     ```
 - To search through messages
@@ -539,6 +535,17 @@ Of course, replace ``` xyz ``` with an actual ID.
     // Or if you've left the group -- call this
     const metadata2 = await conn.groupMetadataMinimal ("abcd-xyz@g.us") 
     ```
+- To join the group using the invitation code
+    ``` ts
+    const response = await conn.acceptInvite ("xxx")
+    console.log("joined to: " + response.gid)
+    ```
+    Of course, replace ``` xxx ``` with invitation code.
+- To revokes the current invite link of a group
+    ``` ts
+    const response = await conn.revokeInvite ("abcd-xyz@g.us")
+    console.log("new group code: " + response.code)
+    ```
 
 ## Broadcast Lists & Stories
 
@@ -572,7 +579,7 @@ This will enable you to see all sorts of messages WhatsApp sends in the console.
 
     Hence, you can register a callback for an event using the following:
     ``` ts
-    conn.on (["action", null, "battery"], json => {
+    conn.on (`CB:action,,battery`, json => {
         const batteryLevelStr = json[2][0][1].value
         const batterylevel = parseInt (batteryLevelStr)
         console.log ("battery level: " + batterylevel + "%")

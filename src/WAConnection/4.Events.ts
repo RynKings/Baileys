@@ -1,7 +1,7 @@
 import * as QR from 'qrcode-terminal'
 import { WAConnection as Base } from './3.Connect'
-import { WAMessageStatusUpdate, WAMessage, WAContact, WAChat, WAMessageProto, WA_MESSAGE_STUB_TYPE, WA_MESSAGE_STATUS_TYPE, PresenceUpdate, BaileysEvent, DisconnectReason, WAOpenResult, Presence, AuthenticationCredentials, WAParticipantAction, WAGroupMetadata, WAUser, WANode, WAPresenceData, WAChatUpdate, BlocklistUpdate, WAContactUpdate } from './Constants'
-import { whatsappID, unixTimestampSeconds, isGroupID, GET_MESSAGE_ID, WA_MESSAGE_ID, waMessageKey, newMessagesDB, shallowChanges, toNumber } from './Utils'
+import { WAMessage, WAContact, WAChat, WAMessageProto, WA_MESSAGE_STUB_TYPE, WA_MESSAGE_STATUS_TYPE, PresenceUpdate, BaileysEvent, DisconnectReason, WAOpenResult, Presence, WAParticipantAction, WAGroupMetadata, WANode, WAPresenceData, WAChatUpdate, BlocklistUpdate, WAContactUpdate, WAMetric, WAFlag } from './Constants'
+import { whatsappID, unixTimestampSeconds, GET_MESSAGE_ID, WA_MESSAGE_ID, newMessagesDB, shallowChanges, toNumber, isGroupID } from './Utils'
 import KeyedDB from '@adiwajshing/keyed-db'
 import { Mutex } from './Mutex'
 
@@ -10,6 +10,29 @@ export class WAConnection extends Base {
     constructor () {
         super ()
         this.setMaxListeners (30)
+        this.chatsDebounceTimeout.setTask(() => {
+            this.logger.debug('pinging with chats query')
+            this.sendChatsQuery(this.msgCount)
+
+            this.chatsDebounceTimeout.start()
+        })
+        this.on('open', () => {
+            // send queries WA Web expects
+            this.sendBinary (['query', {type: 'contacts', epoch: '1'}, null], [ WAMetric.queryContact, WAFlag.ignore ])
+            this.sendBinary (['query', {type: 'status', epoch: '1'}, null], [ WAMetric.queryStatus, WAFlag.ignore ])
+            this.sendBinary (['query', {type: 'quick_reply', epoch: '1'}, null], [ WAMetric.queryQuickReply, WAFlag.ignore ])
+            this.sendBinary (['query', {type: 'label', epoch: '1'}, null], [ WAMetric.queryLabel, WAFlag.ignore ])
+            this.sendBinary (['query', {type: 'emoji', epoch: '1'}, null], [ WAMetric.queryEmoji, WAFlag.ignore ])
+            this.sendBinary (['action', {type: 'set', epoch: '1'}, [['presence', {type: Presence.available}, null]] ], [ WAMetric.presence, WAFlag.available ])
+            
+            if(this.connectOptions.queryChatsTillReceived) {
+                this.chatsDebounceTimeout.start()
+            } else {
+                this.sendChatsQuery(1)
+            }
+
+            this.logger.debug('sent init queries')
+        })
         // on disconnects
         this.on('CB:Cmd,type:disconnect', json => (
             this.state === 'open' && this.unexpectedDisconnect(json[1].kind || 'unknown')
@@ -40,7 +63,7 @@ export class WAConnection extends Base {
                 chat.count = +chat.count
                 chat.messages = newMessagesDB()
                 // chats data (log json to see what it looks like)
-                chats.insert(chat) 
+                chats.insertIfAbsent(chat) 
             })
             this.logger.info (`received ${json[2].length} chats`)
 
@@ -231,8 +254,6 @@ export class WAConnection extends Base {
                 if (chat.messages.upsert(message).length) {
                     const chatUpdate: Partial<WAChat> = { jid, messages: newMessagesDB([ message ]) }
                     this.emit ('chat-update', chatUpdate)
-                    // emit deprecated
-                    this.emit ('message-update', message)
                 }
             } else {
                 this.logger.debug ({ unhandled: true }, 'received message update for non-present message from ' + jid)
@@ -293,7 +314,7 @@ export class WAConnection extends Base {
             const FUNCTIONS = {
                 'delete': () => {
                     chat['delete'] = 'true'
-                    this.chats.delete(chat)
+                    this.chats.deleteById(chat.jid)
                     return 'delete'
                 },
                 'clear': () => {
@@ -356,14 +377,21 @@ export class WAConnection extends Base {
         this.on ('CB:action,,read', async json => {
             const update = json[2][0][1]
             const jid = whatsappID(update.jid)
-            const chat = this.chats.get (jid) || await this.chatAdd (jid)
-
-            if (update.type === 'false') chat.count = -1
-            else chat.count = 0
-
-            this.emit ('chat-update', { jid: chat.jid, count: chat.count })
+            const chat = this.chats.get (jid)
+            if(chat) {
+                if (update.type === 'false') chat.count = -1
+                else chat.count = 0
+    
+                this.emit ('chat-update', { jid: chat.jid, count: chat.count })
+            } else {
+                this.logger.warn('recieved read update for unknown chat ' + jid)
+            }
         })      
-        this.on ('qr', qr => QR.generate(qr, { small: true }))
+        this.on('qr', qr => {
+			if (this.connectOptions.logQR) {
+			QR.generate(qr, { small: true })
+			}
+		});
 
         // blocklist updates
         this.on('CB:Blocklist', json => {
@@ -378,6 +406,9 @@ export class WAConnection extends Base {
 
             this.emit('blocklist-update', update)
         })
+    }
+    protected sendChatsQuery(epoch: number) {
+        return this.sendBinary(['query', {type: 'chat', epoch: epoch.toString()}, null], [ WAMetric.queryChat, WAFlag.ignore ])
     }
     /** Get the URL to download the profile picture of a person/group */
     @Mutex (jid => jid)
@@ -419,18 +450,17 @@ export class WAConnection extends Base {
         }
     }
     /** inserts an empty chat into the DB */
-    protected chatAdd (jid: string, name?: string) {        
+    protected chatAdd (jid: string, name?: string, properties: Partial<WAChat> = {}) {        
         const chat: WAChat = {
             jid,
             name,
             t: unixTimestampSeconds(),
             messages: newMessagesDB(),
             count: 0,
-            modify_tag: '',
-            spam: 'false'
+            ...(properties || {})
         }
-        if(this.chats.insertIfAbsent (chat).length) {
-            this.emit ('chat-new', chat)
+        if(this.chats.insertIfAbsent(chat).length) {
+            this.emit('chat-new', chat)
             return chat
         }   
     }
@@ -463,7 +493,11 @@ export class WAConnection extends Base {
     }
     /** Adds the given message to the appropriate chat, if the chat doesn't exist, it is created */
     protected async chatAddMessageAppropriate (message: WAMessage) {
-        const jid = whatsappID (message.key.remoteJid)
+        const jid = whatsappID(message.key.remoteJid)
+        if(isGroupID(jid) && !jid.includes('-')) {
+            this.logger.warn({ gid: jid }, 'recieved odd group ID')
+            return
+        }
         const chat = this.chats.get(jid) || await this.chatAdd (jid)
         this.chatAddMessage (message, chat)
     }
@@ -552,6 +586,18 @@ export class WAConnection extends Base {
                 const emitGroupUpdate = (update: Partial<WAGroupMetadata>) => this.emitGroupUpdate(jid, update)
                 
                 switch (message.messageStubType) {
+                    case WA_MESSAGE_STUB_TYPE.CHANGE_EPHEMERAL_SETTING:
+                        chatUpdate.eph_setting_ts = message.messageTimestamp.toString()
+                        chatUpdate.ephemeral = message.messageStubParameters[0]
+                        
+                        if (+chatUpdate.ephemeral) {
+                            chat.eph_setting_ts = chatUpdate.eph_setting_ts
+                            chat.ephemeral = chatUpdate.ephemeral
+                        } else {
+                            delete chat.eph_setting_ts
+                            delete chat.ephemeral
+                        }
+                        break
                     case WA_MESSAGE_STUB_TYPE.GROUP_PARTICIPANT_LEAVE:
                     case WA_MESSAGE_STUB_TYPE.GROUP_PARTICIPANT_REMOVE:
                         participants = message.messageStubParameters.map (whatsappID)

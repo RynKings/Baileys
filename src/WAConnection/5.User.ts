@@ -1,5 +1,5 @@
 import {WAConnection as Base} from './4.Events'
-import { Presence, WABroadcastListInfo, WAProfilePictureChange, WALoadChatOptions, WAChatIndex, BlocklistUpdate } from './Constants'
+import { Presence, WABroadcastListInfo, WAProfilePictureChange, WALoadChatOptions, WAChatIndex, BlocklistUpdate, WABusinessProfile } from './Constants'
 import {
     WAMessage,
     WANode,
@@ -22,8 +22,8 @@ export class WAConnection extends Base {
         if (this.state !== 'open') {
             return this.isOnWhatsAppNoConn(str)
         }
-        const { status, jid } = await this.query({json: ['query', 'exist', str], requiresPhoneConnection: false})
-        if (status === 200) return { exists: true, jid: whatsappID(jid) }
+        const { status, jid, biz } = await this.query({json: ['query', 'exist', str], requiresPhoneConnection: false})
+        if (status === 200) return { exists: true, jid: whatsappID(jid), isBusiness: biz as boolean}
     }
     /** 
      * Query whether a given number is registered on WhatsApp, without needing to open a WS connection
@@ -79,6 +79,21 @@ export class WAConnection extends Base {
         )
         this.emit ('contact-update', { jid: this.user.jid, status })
         return response
+    }
+    /** Updates business profile. */
+    async updateBusinessProfile(profile: WABusinessProfile) {
+        if (profile.business_hours?.config) {
+            profile.business_hours.business_config = profile.business_hours.config
+            delete profile.business_hours.config
+        }
+        const json = ['action', "editBusinessProfile", {...profile, v: 2}]
+        let response;
+        try {
+            response = await this.query({ json, expect200: true, requiresPhoneConnection: true })
+        } catch (_) {
+            return {status: 400}
+        } 
+        return { status: response.status }
     }
     async updateProfileName (name: string) {
         const response = (await this.setQuery (
@@ -210,5 +225,31 @@ export class WAConnection extends Base {
         }
 
         return result
+    }
+    /**
+     * Query Business Profile (Useful for VCards)
+     * @param jid Business Jid
+     * @returns {WABusinessProfile} profile object or undefined if not business account
+     */
+    async getBusinessProfile(jid: string) {
+        jid = whatsappID(jid)
+        const {
+            profiles: [{
+                profile,
+                wid 
+            }]
+        } = await this.query({
+            json: ["query", "businessProfile", [
+                {
+                    "wid": jid.replace('@s.whatsapp.net', '@c.us')
+                }
+            ], 84],
+            expect200: true,
+            requiresPhoneConnection: false,
+        })
+        return {
+            ...profile,
+            wid: whatsappID(wid)
+        }
     }
 }

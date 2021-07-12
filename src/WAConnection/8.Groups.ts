@@ -88,8 +88,7 @@ export class WAConnection extends Base {
             metadata = await this.groupMetadata (gid)
             this.logger.warn (`group ID switched from ${gid} to ${response.gid}`)
         }
-        await this.chatAdd (response.gid, title)
-        this.chats.get(response.gid).metadata = metadata
+        await this.chatAdd(response.gid, title, { metadata })
         return response
     }
     /**
@@ -171,10 +170,33 @@ export class WAConnection extends Base {
         const node: WANode = [ setting, {value: onlyAdmins ? 'true' : 'false'}, null ]
         return this.groupQuery('prop', jid, null, null, [node]) as Promise<{status: number}>
     }
-    /** Get the invite link of the given group */
+    /**
+     * Get the invite link of the given group
+     * @param jid the ID of the group
+     * @returns invite code
+     */
     async groupInviteCode(jid: string) {
         const json = ['query', 'inviteCode', jid]
         const response = await this.query({json, expect200: true, requiresPhoneConnection: false})
         return response.code as string
+    }
+    /**
+     * Join group via invite code
+     * @param code the invite code
+     * @returns Object containing gid
+     */
+    async acceptInvite(code: string) {
+        const json = ['action', 'invite', code]
+        const response = await this.query({json, expect200: true})
+        return response
+    }
+    /**
+     * Revokes the current invite link for a group chat
+     * @param jid the ID of the group
+     */
+    async revokeInvite(jid: string) {
+        const json = ['action', 'inviteReset', jid]
+        const response = await this.query({json, expect200: true})
+        return response
     }
 }

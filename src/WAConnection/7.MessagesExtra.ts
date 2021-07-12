@@ -99,7 +99,7 @@ export class WAConnection extends Base {
      * Load the conversation with a group or person
      * @param count the number of messages to load
      * @param cursor the data for which message to offset the query by
-     * @param mostRecentFirst retreive the most recent message first or retreive from the converation start
+     * @param mostRecentFirst retrieve the most recent message first or retrieve from the converation start
      */
     @Mutex (jid => jid)
     async loadMessages (
@@ -110,7 +110,7 @@ export class WAConnection extends Base {
     ) {
         jid = whatsappID(jid)
 
-        const retreive = (count: number, indexMessage: any) => this.fetchMessagesFromWA (jid, count, indexMessage, mostRecentFirst)
+        const retrieve = (count: number, indexMessage: any) => this.fetchMessagesFromWA (jid, count, indexMessage, mostRecentFirst)
         
         const chat = this.chats.get (jid)
         const hasCursor = cursor?.id && typeof cursor?.fromMe !== 'undefined'
@@ -126,7 +126,7 @@ export class WAConnection extends Base {
             } else if (diff > 0) {
                 const fMessage = chat.messages.all()[0]
                 let fepoch = (fMessage && fMessage['epoch']) || 0
-                const extra = await retreive (diff, messages[0]?.key || cursor)
+                const extra = await retrieve (diff, messages[0]?.key || cursor)
                 // add to DB
                 for (let i = extra.length-1;i >= 0; i--) {
                     const m = extra[i]
@@ -139,7 +139,7 @@ export class WAConnection extends Base {
                 }
                 messages.unshift (...extra)
             }
-        } else messages = await retreive (count, cursor)
+        } else messages = await retrieve (count, cursor)
         
         if (messages[0]) cursor = { id: messages[0].key.id, fromMe: messages[0].key.fromMe }
         else cursor = null
@@ -148,9 +148,9 @@ export class WAConnection extends Base {
     }
     /**
      * Load the entire friggin conversation with a group or person
-     * @param onMessage callback for every message retreived
+     * @param onMessage callback for every message retrieved
      * @param chunkSize the number of messages to load in a single request
-     * @param mostRecentFirst retreive the most recent message first or retreive from the converation start
+     * @param mostRecentFirst retrieve the most recent message first or retrieve from the converation start
      */
     loadAllMessages(jid: string, onMessage: (m: WAMessage) => Promise<void>|void, chunkSize = 25, mostRecentFirst = true) {
         let offsetID = null
@@ -172,10 +172,8 @@ export class WAConnection extends Base {
             // if there are still more messages
             if (messages.length >= chunkSize) {
                 offsetID = lastMessage.key // get the last message
-                return new Promise((resolve, reject) => {
-                    // send query after 200 ms
-                    setTimeout(() => loadMessage().then(resolve).catch(reject), 200)
-                })
+                await delay(200)
+                return loadMessage()
             }
         }
         return loadMessage() as Promise<void>
@@ -183,7 +181,7 @@ export class WAConnection extends Base {
     /**
      * Find a message in a given conversation
      * @param chunkSize the number of messages to load in a single request
-     * @param onMessage callback for every message retreived, if return true -- the loop will break
+     * @param onMessage callback for every message retrieved, if return true -- the loop will break
      */
     async findMessage (jid: string, chunkSize: number, onMessage: (m: WAMessage) => boolean) {
         const chat = this.chats.get (whatsappID(jid))
@@ -319,8 +317,6 @@ export class WAConnection extends Base {
 
                 const chatUpdate: Partial<WAChat> = { jid: messageKey.remoteJid, messages: newMessagesDB([ message ]) }
                 this.emit ('chat-update', chatUpdate)
-                // emit deprecated
-                this.emit ('message-update', message)
             }
         }
         return result
@@ -352,7 +348,7 @@ export class WAConnection extends Base {
     generateForwardMessageContent (message: WAMessage, forceForward: boolean=false) {
         let content = message.message
         if (!content) throw new BaileysError ('no content in message', { status: 400 })
-        content = JSON.parse(JSON.stringify(content)) // hacky copy
+        content = WAMessageProto.Message.fromObject(content) // hacky copy
 
         let key = Object.keys(content)[0]
 
@@ -379,13 +375,6 @@ export class WAConnection extends Base {
         const waMessage = this.prepareMessageFromContent (jid, content, {})
         await this.relayWAMessage (waMessage)
         return waMessage
-    }
-    /** 
-     * Delete the chat of a given ID 
-     * @deprecated -- use `modifyChat(jid, 'delete')` instead
-     * */
-    deleteChat (jid: string) {
-        return this.modifyChat(jid, 'delete')
     }
     /**
      * Clear the chat messages
@@ -449,23 +438,31 @@ export class WAConnection extends Base {
         const response = await this.setQuery ([['chat', chatAttrs, null]], [ WAMetric.chat, WAFlag.ignore ])
 
         if (chat && response.status === 200) {
-            if (type === ChatModification.clear) {
-                if (includeStarred) {
-                    chat.messages.clear ()
-                } else {
-                    chat.messages = chat.messages.filter(m => m.starred)
-                }
+            switch(type) {
+                case ChatModification.clear:
+                    if (includeStarred) {
+                        chat.messages.clear()
+                    } else {
+                        chat.messages = chat.messages.filter(m => m.starred)
+                    }
+                break
+                case ChatModification.delete:
+                    this.chats.deleteById(jid)
+                    this.emit('chat-update', { jid, delete: 'true' })
+                break
+                default:
+                    this.chats.update(jid, chat => {
+                        if (type.includes('un')) {
+                            type = type.replace ('un', '') as ChatModification
+                            delete chat[type.replace('un','')]
+                            this.emit ('chat-update', { jid, [type]: false })
+                        } else {
+                            chat[type] = chatAttrs[type] || 'true'
+                            this.emit ('chat-update', { jid, [type]: chat[type] })
+                        }
+                    })
+                break
             }
-            this.chats.update(jid, chat => {
-                if (type.includes('un')) {
-                    type = type.replace ('un', '') as ChatModification
-                    delete chat[type.replace('un','')]
-                    this.emit ('chat-update', { jid, [type]: false })
-                } else {
-                    chat[type] = chatAttrs[type] || 'true'
-                    this.emit ('chat-update', { jid, [type]: chat[type] })
-                }
-            })
         }
         return response
     }
