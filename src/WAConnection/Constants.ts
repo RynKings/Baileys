@@ -334,7 +334,7 @@ export enum MessageType {
     contactsArray = 'contactsArrayMessage',
     groupInviteMessage = 'groupInviteMessage',
     listMessage = 'listMessage',
-    buttonsMessage = 'buttonsMessage'
+    buttonsMessage = 'buttonsMessage',
     location = 'locationMessage',
     liveLocation = 'liveLocationMessage',
 
